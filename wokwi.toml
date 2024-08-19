@@ -1,0 +1,4 @@
+[wokwi]
+version = 1
+firmware = 'build/mastering_freertos.bin'
+elf = 'build/mastering_freertos.elf'
