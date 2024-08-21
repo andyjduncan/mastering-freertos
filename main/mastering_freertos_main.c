@@ -47,7 +47,7 @@ void app_main() {
             "Task 2",
             2000,
             (void *) "Task 2",
-            1,
+            2,
             NULL,
             PRO_CPU_NUM
     );
