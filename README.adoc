@@ -1,0 +1,5 @@
+= Mastering FreeRTOS
+
+Exercises from the Mastering FreeRTOS book.
+
+Adapted to use esp-idf targeting an ESP32 C3 on Wokwi.
