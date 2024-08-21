@@ -7,7 +7,8 @@ volatile unsigned long mainDELAY_LOOP_COUNT = 1000000;
 
 void vTaskFunction(void *pvParameters) {
     char *pcTaskName;
-    volatile unsigned long ul; /* volatile to ensure ul is not optimized away. */
+
+    const TickType_t loopDelay = pdMS_TO_TICKS(250);
     /*
      * The string to print out is passed in via the parameter. Cast this to a
      * character pointer.
@@ -18,13 +19,7 @@ void vTaskFunction(void *pvParameters) {
         /* Print out the name of this task. */
         printf("%s running\n", pcTaskName);
         /* Delay for a period. */
-        for (ul = 0; ul < mainDELAY_LOOP_COUNT; ul++) {
-            /*
-             * This loop is just a very crude delay implementation. There is
-             * nothing to do in here. Later exercises will replace this crude
-             * loop with a proper delay/sleep function.
-             */
-        }
+        vTaskDelay(loopDelay);
     }
 }
 
