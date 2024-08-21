@@ -48,22 +48,24 @@ void vTask2( void * pvParameters )
 
 void app_main() {
 
+    printf("Starting Task 1\n");
     xTaskCreatePinnedToCore(
             vTask1,
             "Task 1",
             2000,
             NULL,
-            2,
+            1,
             NULL,
             PRO_CPU_NUM
             );
 
+    printf("Starting Task 2\n");
     xTaskCreatePinnedToCore(
             vTask2,
             "Task 2",
             2000,
             NULL,
-            2,
+            1,
             NULL,
             PRO_CPU_NUM
     );
