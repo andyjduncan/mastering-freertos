@@ -1,120 +1,94 @@
-#define CONFIG_FREERTOS_USE_IDLE_HOOK 1
-
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* Define an enumerated type used to identify the source of the data. */
-typedef enum {
-    eSender1,
-    eSender2
-} DataSource_t;
+/* Declare two variables of type QueueHandle_t. Both queues are added
+   to the same queue set. */
+static QueueHandle_t xQueue1 = NULL, xQueue2 = NULL;
+/* Declare a variable of type QueueSetHandle_t. This is the queue set
+   to which the two queues are added. */
+static QueueSetHandle_t xQueueSet = NULL;
 
-/* Define the structure type that will be passed on the queue. */
-typedef struct {
-    uint8_t ucValue;
-    DataSource_t eDataSource;
-} Data_t;
-
-/* Declare two variables of type Data_t that will be passed on the queue. */
-static const Data_t xStructsToSend[2] = {
-        {100, eSender1}, /* Used by Sender1. */
-        {200, eSender2}  /* Used by Sender2. */
-};
-
-/* Declare a variable of type QueueHandle_t. This is used to store the
-   handle to the queue that is accessed by all three tasks. */
-QueueHandle_t xQueue;
-
-static void vSenderTask(void *pvParameters) {
-    BaseType_t xStatus;
-
-    const TickType_t xTicksToWait = pdMS_TO_TICKS(100);
+void vSenderTask1(void *pvParameters) {
+    const TickType_t xBlockTime = pdMS_TO_TICKS(100);
+    const char *const pcMessage = "Message from vSenderTask1\n";
     /* As per most tasks, this task is implemented within an infinite loop. */
     while (true) {
-        /* Send to the queue.
-           The second parameter is the address of the structure being sent. The
-           address is passed in as the task parameter so pvParameters is used
-           directly.
-           The third parameter is the Block time - the time the task should be
-           kept in the Blocked state to wait for space to become available on
-           the queue if the queue is already full. A block time is specified
-           because the sending tasks have a higher priority than the receiving
-           task so the queue is expected to become full. The receiving task
-           will remove items from the queue when both sending tasks are in the
-           Blocked state. */
-        xStatus = xQueueSendToBack(xQueue, pvParameters, xTicksToWait);
-        if (xStatus != pdPASS) {
-            /* The send operation could not complete, even after waiting for
-               100ms. This must be an error as the receiving task should make
-               space in the queue as soon as both sending tasks are in the
-               Blocked state. */
-            printf("Could not send to the queue.\n");
-        }
+        /* Block for 100ms. */
+        vTaskDelay(xBlockTime);
+        /* Send this task's string to xQueue1. It is not necessary to use a
+           block time, even though the queue can only hold one item. This is
+           because the priority of the task that reads from the queue is
+           higher than the priority of this task; as soon as this task writes
+           to the queue it will be pre-empted by the task that reads from the
+           queue, so the queue will already be empty again by the time the
+           call to xQueueSend() returns. The block time is set to 0. */
+        xQueueSend(xQueue1, &pcMessage, 0);
     }
 }
 
-static void vReceiverTask(void *pvParameters) {
-    /* Declare the structure that will hold the values received from the
-       queue. */
-    Data_t xReceivedStructure;
-    BaseType_t xStatus;
-    /* This task is also defined within an infinite loop. */
+void vSenderTask2( void *pvParameters ) {
+    const TickType_t xBlockTime = pdMS_TO_TICKS( 200 );
+    const char * const pcMessage = "Message from vSenderTask2\n";
+    /* As per most tasks, this task is implemented within an infinite loop. */
     while (true) {
-/* Because it has the lowest priority this task will only run when the
-   sending tasks are in the Blocked state. The sending tasks will only
-   enter the Blocked state when the queue is full so this task always
-   expects the number of items in the queue to be equal to the queue
-   length, which is 3 in this case. */
-        if (uxQueueMessagesWaiting(xQueue) != 3) {
-            printf("Queue should have been full!\n");
-        }
-/* Receive from the queue.
-   The second parameter is the buffer into which the received data will
-   be placed. In this case the buffer is simply the address of a
-   variable that has the required size to hold the received structure.
-   The last parameter is the block time - the maximum amount of time
-   that the task will remain in the Blocked state to wait for data to
-   be available if the queue is already empty. In this case a block
-   time is not necessary because this task will only run when the
-   queue is full. */
-        xStatus = xQueueReceive(xQueue, &xReceivedStructure, 0);
-        if (xStatus == pdPASS) {
-            /* Data was successfully received from the queue, print out the
-               received value and the source of the value. */
-            if (xReceivedStructure.eDataSource == eSender1) {
-                printf("From Sender 1 = %i\n",
-                       xReceivedStructure.ucValue);
-            } else {
-                printf("From Sender 2 = %i\n",
-                       xReceivedStructure.ucValue);
-            }
-        } else {
-            printf("Could not receive from the queue.\n");
-        }
+        /* Block for 200ms. */
+        vTaskDelay( xBlockTime );
+        /* Send this task's string to xQueue2. It is not necessary to use a
+           block time, even though the queue can only hold one item. This is
+           because the priority of the task that reads from the queue is
+           higher than the priority of this task; as soon as this task writes
+           to the queue it will be pre-empted by the task that reads from the
+           queue, so the queue will already be empty again by the time the
+           call to xQueueSend() returns. The block time is set to 0. */
+        xQueueSend( xQueue2, &pcMessage, 0 );
+    }
+}
+
+void vReceiverTask( void *pvParameters ) {
+    QueueHandle_t xQueueThatContainsData; char *pcReceivedString;
+    /* As per most tasks, this task is implemented within an infinite loop. */
+    while (true) {
+        /* Block on the queue set to wait for one of the queues in the set to
+           contain data. Cast the QueueSetMemberHandle_t value returned from
+           xQueueSelectFromSet() to a QueueHandle_t, as it is known all the
+           members of the set are queues (the queue set does not contain any
+           semaphores). */
+        xQueueThatContainsData = ( QueueHandle_t ) xQueueSelectFromSet(
+                xQueueSet, portMAX_DELAY );
+        /* An indefinite block time was used when reading from the queue set,
+           so xQueueSelectFromSet() will not have returned unless one of the
+           queues in the set contained data, and xQueueThatContainsData cannot
+           be NULL. Read from the queue. It is not necessary to specify a
+           block time because it is known the queue contains data. The block
+           time is set to 0. */
+        xQueueReceive( xQueueThatContainsData, &pcReceivedString, 0 );
+        /* Print the string received from the queue. */
+        printf( "%s", pcReceivedString );
     }
 }
 
 void app_main() {
 
-/* The queue is created to hold a maximum of 3 structures of type Data_t. */
-    xQueue = xQueueCreate(3, sizeof(Data_t));
+    /* Create the two queues, both of which send character pointers. The
+       priority of the receiving task is above the priority of the sending
+       tasks, so the queues will never have more than one item in them at
+       any one time*/
+    xQueue1 = xQueueCreate( 1, sizeof( char * ) ); xQueue2 = xQueueCreate( 1, sizeof( char * ) );
+    /* Create the queue set. Two queues will be added to the set, each of
+       which can contain 1 item, so the maximum number of queue handles the
+       queue set will ever have to hold at one time is 2 (2 queues multiplied
+       by 1 item per queue). */
+    xQueueSet = xQueueCreateSet( 1 * 2 );
 
-    if (xQueue != NULL) {
-        /* Create two instances of the task that will write to the queue. The
-           parameter is used to pass the structure that the task will write to
-           the queue, so one task will continuously send xStructsToSend[ 0 ]
-           to the queue while the other task will continuously send
-           xStructsToSend[ 1 ]. Both tasks are created at priority 2, which is
-           above the priority of the receiver. */
-        xTaskCreate(vSenderTask, "Sender1", 2000, &xStructsToSend[0],
-                    2, NULL);
-        xTaskCreate(vSenderTask, "Sender2", 2000, &xStructsToSend[1],
-                    2, NULL);
-        /* Create the task that will read from the queue. The task is created
-           with priority 1, so below the priority of the sender tasks. */
-        xTaskCreate(vReceiverTask, "Receiver", 2000, NULL, 1, NULL);
-    } else {
-        printf("Couldn't create queue");
-    }
+    /* Add the two queues to the set. */
+    xQueueAddToSet( xQueue1, xQueueSet );
+    xQueueAddToSet( xQueue2, xQueueSet );
+    /* Create the tasks that send to the queues. */
+    xTaskCreate( vSenderTask1, "Sender1", 2000, NULL, 1, NULL );
+    xTaskCreate( vSenderTask2, "Sender2", 2000, NULL, 1, NULL );
+    /* Create the task that reads from the queue set to determine which of
+       the two queues contain data. */
+    xTaskCreate( vReceiverTask, "Receiver", 2000, NULL, 2, NULL );
+
 }
