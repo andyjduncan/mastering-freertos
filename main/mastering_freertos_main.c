@@ -8,6 +8,8 @@ volatile unsigned long mainDELAY_LOOP_COUNT = 1000000;
 void vTaskFunction(void *pvParameters) {
     char *pcTaskName;
 
+    TickType_t lastWakeTime = xTaskGetTickCount();
+
     const TickType_t loopDelay = pdMS_TO_TICKS(250);
     /*
      * The string to print out is passed in via the parameter. Cast this to a
@@ -19,7 +21,7 @@ void vTaskFunction(void *pvParameters) {
         /* Print out the name of this task. */
         printf("%s running\n", pcTaskName);
         /* Delay for a period. */
-        vTaskDelay(loopDelay);
+        vTaskDelayUntil(&lastWakeTime, loopDelay);
     }
 }
 
