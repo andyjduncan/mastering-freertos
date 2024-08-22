@@ -8,9 +8,27 @@
       "id": "esp",
       "top": 0,
       "left": 0,
-      "attrs": { "builder": "esp-idf" }
+      "attrs": {
+        "builder": "esp-idf"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 35,
+      "left": 112,
+      "attrs": {
+        "color": "green",
+        "bounce": "0",
+        "key": "1"
+      }
     }
   ],
-  "connections": [ [ "esp:TX", "$serialMonitor:RX", "", [] ], [ "esp:RX", "$serialMonitor:TX", "", [] ] ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "btn1:2.r", "esp:6", "green", [ "v29.7", "h-9.4" ] ],
+    [ "btn1:1.l", "esp:GND.9", "green", [ "h0" ] ]
+  ],
   "dependencies": {}
 }
