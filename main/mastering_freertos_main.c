@@ -3,12 +3,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/portable.h"
 
-void vDeferredHandlingFunction(void *pvParameter1, uint32_t ulParameter2) {
-    printf( "Handler task - Processing event %lu.\n", ulParameter2);
-}
+QueueHandle_t  xIntegerQueue;
 
 static void isrHandler() {
-    static uint32_t ulParameterValue = 0;
+    static uint32_t ulValueToSend = 0;
 
     BaseType_t xHigherPriorityTaskWoken;
 
@@ -17,16 +15,8 @@ static void isrHandler() {
        API function if a context switch is required. */
     xHigherPriorityTaskWoken = pdFALSE;
 
-    /* Send a pointer to the interrupt's deferred handling function to the
-       daemon task. The deferred handling function's pvParameter1 parameter
-       is not used so just set to NULL. The deferred handling function's
-       ulParameter2 parameter is used to pass a number that is incremented by
-       one each time this interrupt handler executes. */
-    xTimerPendFunctionCallFromISR( vDeferredHandlingFunction, /* Function to execute */
-                                   NULL, /* Not used */
-                                   ulParameterValue, /* Incrementing value. */
-                                   &xHigherPriorityTaskWoken );
-    ulParameterValue++;
+    xQueueSendToBackFromISR(xIntegerQueue, &ulValueToSend, &xHigherPriorityTaskWoken);
+    ulValueToSend++;
 
     /* Pass the xHigherPriorityTaskWoken value into portYIELD_FROM_ISR().
       If xHigherPriorityTaskWoken was set to pdTRUE inside
@@ -36,6 +26,16 @@ static void isrHandler() {
       ports, the Windows port requires the ISR to return a value - the return
       statement is inside the Windows version of portYIELD_FROM_ISR(). */
     portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+}
+
+static void integerPrinter(void *pvParameters) {
+    uint32_t receivedNumber;
+
+    while (true) {
+        xQueueReceive(xIntegerQueue, &receivedNumber, portMAX_DELAY);
+
+        printf("Received %lu\n", receivedNumber);
+    }
 }
 
 void app_main() {
@@ -54,10 +54,19 @@ void app_main() {
     //configure GPIO with the given settings
     gpio_config(&io_conf);
 
-    gpio_install_isr_service(ESP_INTR_FLAG_LOWMED);
+    xIntegerQueue = xQueueCreate(10, sizeof(uint32_t));
 
-    gpio_isr_handler_add(GPIO_NUM_6, isrHandler, NULL);
+    if (xIntegerQueue) {
 
-    gpio_set_intr_type(GPIO_NUM_6, GPIO_INTR_LOW_LEVEL);
-    printf("Interrupt enabled\n");
+        xTaskCreate( integerPrinter, "Integer", 2000, NULL, 2, NULL );
+
+        gpio_install_isr_service(ESP_INTR_FLAG_LOWMED);
+
+        gpio_isr_handler_add(GPIO_NUM_6, isrHandler, NULL);
+
+        gpio_set_intr_type(GPIO_NUM_6, GPIO_INTR_LOW_LEVEL);
+        printf("Interrupt enabled\n");
+    } else {
+        printf("Queue failed to create\n");
+    }
 }
