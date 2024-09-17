@@ -2,71 +2,52 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/timers.h"
+#include "freertos/portable.h"
 
-/* The periods assigned to the one-shot and auto-reload timers are 3.333
-   second and half a second respectively. */
-#define mainBACKLIGHT_TIMER_PERIOD pdMS_TO_TICKS( 2500 )
+SemaphoreHandle_t  xBinarySemaphore;
 
-TimerHandle_t xBacklightTimer;
+static void isrHandler() {
 
-BaseType_t xSimulatedBacklightOn = pdFALSE;
+    BaseType_t xHigherPriorityTaskWoken;
 
-static void prvBacklightTimerCallback(TimerHandle_t xTimer) {
-    TickType_t xTimeNow = xTaskGetTickCount();
-    /* The backlight timer expired, turn the backlight off. */
-    xSimulatedBacklightOn = pdFALSE;
-    /* Print the time at which the backlight was turned off. */
-    printf("Timer expired, turning backlight OFF at time %lu\n", xTimeNow);
+    /* The xHigherPriorityTaskWoken parameter must be initialized to
+       pdFALSE as it will get set to pdTRUE inside the interrupt safe
+       API function if a context switch is required. */
+    xHigherPriorityTaskWoken = pdFALSE;
+
+    /* 'Give' the semaphore to unblock the task, passing in the address of
+       xHigherPriorityTaskWoken as the interrupt safe API function's
+       pxHigherPriorityTaskWoken parameter. */
+    xSemaphoreGiveFromISR( xBinarySemaphore, &xHigherPriorityTaskWoken );
+
+    /* Pass the xHigherPriorityTaskWoken value into portYIELD_FROM_ISR().
+      If xHigherPriorityTaskWoken was set to pdTRUE inside
+      xSemaphoreGiveFromISR() then calling portYIELD_FROM_ISR() will request
+      a context switch. If xHigherPriorityTaskWoken is still pdFALSE then
+      calling portYIELD_FROM_ISR() will have no effect. Unlike most FreeRTOS
+      ports, the Windows port requires the ISR to return a value - the return
+      statement is inside the Windows version of portYIELD_FROM_ISR(). */
+    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
 }
 
-static void vKeyHitTask(void *pvParameters) {
-    const TickType_t xShortDelay = pdMS_TO_TICKS(50);
-    TickType_t xTimeNow;
-
-    printf("Press button to turn the backlight on.\n");
-/* Ideally an application would be event driven, and use an interrupt to
-   process key presses. It is not practical to use keyboard interrupts
-   when using the FreeRTOS Windows port, so this task is used to poll for
-   a key press. */
-    while (true) {
-        /* Has a key been pressed? */
-        int pressed = gpio_get_level(GPIO_NUM_6);
-
-        if (pressed == 0) {
-            /* A key has been pressed. Record the time. */
-            xTimeNow = xTaskGetTickCount();
-            if (xSimulatedBacklightOn == pdFALSE) {
-                /* The backlight was off, so turn it on and print the time at
-                   which it was turned on. */
-                xSimulatedBacklightOn = pdTRUE;
-                printf("Key pressed, turning backlight ON at time %lu\n",
-                       xTimeNow);
-            } else {
-/* The backlight was already on, so print a message to say the
-   timer is about to be reset and the time at which it was
-   reset. */
-                printf(
-                        "Key pressed, resetting software timer at time %lu\n",
-                        xTimeNow);
-            }
-            /* Reset the software timer. If the backlight was previously off,
-   then this call will start the timer. If the backlight was
-   previously on, then this call will restart the timer. A real
-   application may read key presses in an interrupt. If this
-   function was an interrupt service routine then
-   xTimerResetFromISR() must be used instead of xTimerReset(). */
-            xTimerReset(xBacklightTimer, xShortDelay);
-
-        }
-        vTaskDelay(pdMS_TO_TICKS(25));
+static void vHandlerTask( void *pvParameters ) {
+    /* As per most tasks, this task is implemented within an infinite loop. */
+    while(true) {
+        printf("Waiting for semaphore...\n");
+        /* Use the semaphore to wait for the event. The semaphore was created
+           before the scheduler was started, so before this task ran for the
+           first time. The task blocks indefinitely, meaning this function
+           call will only return once the semaphore has been successfully
+           obtained - so there is no need to check the value returned by
+           xSemaphoreTake(). */
+        xSemaphoreTake( xBinarySemaphore, portMAX_DELAY );
+        /* To get here the event must have occurred. Process the event (in
+           this Case, just print out a message). */
+        printf( "Handler task - Processing event.\n" );
     }
 }
 
 void app_main() {
-
-    BaseType_t xTimerStarted;
-
     //zero-initialize the config structure.
     gpio_config_t io_conf = {};
     //disable interrupt
@@ -82,34 +63,24 @@ void app_main() {
     //configure GPIO with the given settings
     gpio_config(&io_conf);
 
-    xTaskCreate(
-            vKeyHitTask,
-            "Key Press",
-            2000,
-            NULL,
-            1,
-            NULL
-            );
+    gpio_install_isr_service(ESP_INTR_FLAG_LOWMED);
 
-    xBacklightTimer = xTimerCreate("Backlight",
-                                   mainBACKLIGHT_TIMER_PERIOD,
-                                   pdFALSE,
-            /* The timer's ID is initialized to NULL. */
-                                 NULL,
-/* prvTimerCallback() is used by both timers. */
-                                 prvBacklightTimerCallback);
-    if (xBacklightTimer != NULL) {
-        /* Start the software timers, using a block time of 0 (no block time).
-           The scheduler has not been started yet so any block time specified
-           here would be ignored anyway. */
-        xTimerStarted = xTimerStart(xBacklightTimer, 0);
+    gpio_isr_handler_add(GPIO_NUM_6, isrHandler, NULL);
 
-        if (xTimerStarted == pdPASS) {
-            printf("Started timer\n");
-        } else {
-            printf("Timer not started\n");
-        }
-    } else {
-        printf("Timer not created\n");
+    /* Before a semaphore is used it must be explicitly created. In this
+       example a binary semaphore is created. */
+    xBinarySemaphore = xSemaphoreCreateBinary();
+
+    /* Check the semaphore was created successfully. */
+    if( xBinarySemaphore != NULL ) {
+        /* Create the 'handler' task, which is the task to which interrupt
+           processing is deferred. This is the task that will be synchronized
+           with the interrupt. The handler task is created with a high priority
+           to ensure it runs immediately after the interrupt exits. In this
+           case a priority of 3 is chosen. */
+        xTaskCreate( vHandlerTask, "Handler", 4000, NULL, 3, NULL );
+
+        gpio_set_intr_type(GPIO_NUM_6, GPIO_INTR_LOW_LEVEL);
+        printf("Interrupt enabled\n");
     }
 }
