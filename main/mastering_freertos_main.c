@@ -31,6 +31,9 @@ static void isrHandler() {
 }
 
 static void vHandlerTask( void *pvParameters ) {
+    /* xMaxExpectedBlockTime holds the maximum time expected between two
+       interrupts. */
+    const TickType_t xMaxExpectedBlockTime = pdMS_TO_TICKS(2000);
     /* As per most tasks, this task is implemented within an infinite loop. */
     while(true) {
         printf("Waiting for semaphore...\n");
@@ -40,10 +43,13 @@ static void vHandlerTask( void *pvParameters ) {
            call will only return once the semaphore has been successfully
            obtained - so there is no need to check the value returned by
            xSemaphoreTake(). */
-        xSemaphoreTake( xBinarySemaphore, portMAX_DELAY );
-        /* To get here the event must have occurred. Process the event (in
-           this Case, just print out a message). */
-        printf( "Handler task - Processing event.\n" );
+        if (xSemaphoreTake( xBinarySemaphore, xMaxExpectedBlockTime ) == pdPASS) {
+            /* To get here the event must have occurred. Process the event (in
+               this Case, just print out a message). */
+            printf( "Handler task - Processing event.\n" );
+        } else {
+            printf("Handler task - Timeout waiting for event.\n");
+        }
     }
 }
 
