@@ -3,70 +3,66 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/portable.h"
 
-QueueHandle_t  xIntegerQueue;
+SemaphoreHandle_t  xMutex;
 
-static void isrHandler() {
-    static uint32_t ulValueToSend = 0;
-
-    BaseType_t xHigherPriorityTaskWoken;
-
-    /* The xHigherPriorityTaskWoken parameter must be initialized to
-       pdFALSE as it will get set to pdTRUE inside the interrupt safe
-       API function if a context switch is required. */
-    xHigherPriorityTaskWoken = pdFALSE;
-
-    xQueueSendToBackFromISR(xIntegerQueue, &ulValueToSend, &xHigherPriorityTaskWoken);
-    ulValueToSend++;
-
-    /* Pass the xHigherPriorityTaskWoken value into portYIELD_FROM_ISR().
-      If xHigherPriorityTaskWoken was set to pdTRUE inside
-      xSemaphoreGiveFromISR() then calling portYIELD_FROM_ISR() will request
-      a context switch. If xHigherPriorityTaskWoken is still pdFALSE then
-      calling portYIELD_FROM_ISR() will have no effect. Unlike most FreeRTOS
-      ports, the Windows port requires the ISR to return a value - the return
-      statement is inside the Windows version of portYIELD_FROM_ISR(). */
-    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+static void prvNewPrintString( const char *pcString ) {
+    /* The mutex is created before the scheduler is started, so already exists
+       by the time this task executes.
+       Attempt to take the mutex, blocking indefinitely to wait for the mutex
+       if it is not available straight away. The call to xSemaphoreTake() will
+       only return when the mutex has been successfully obtained, so there is
+       no need to check the function return value. If any other delay period
+       was used then the code must check that xSemaphoreTake() returns pdTRUE
+       before accessing the shared resource (which in this case is standard
+       out). As noted earlier in this book, indefinite time outs are not
+       recommended for production code. */
+    xSemaphoreTake( xMutex, portMAX_DELAY );
+    {
+        /* The following line will only execute once the mutex has been
+           successfully obtained. Standard out can be accessed freely now as
+           only one task can have the mutex at any one time. */
+        printf( "%s", pcString );
+        fflush( stdout );
+        /* The mutex MUST be given back! */
+    }
+    xSemaphoreGive( xMutex );
 }
 
-static void integerPrinter(void *pvParameters) {
-    uint32_t receivedNumber;
-
-    while (true) {
-        xQueueReceive(xIntegerQueue, &receivedNumber, portMAX_DELAY);
-
-        printf("Received %lu\n", receivedNumber);
+static void prvPrintTask( void *pvParameters ) {
+    char *pcStringToPrint;
+    const TickType_t xMaxBlockTimeTicks = 0x20;
+    /* Two instances of this task are created. The string printed by the task
+       is passed into the task using the task's parameter. The parameter is
+       cast to the required type. */
+    pcStringToPrint = ( char * ) pvParameters;
+    while(true) {
+        /* Print out the string using the newly defined function. */
+        prvNewPrintString( pcStringToPrint );
+        /* Wait a pseudo random time. Note that rand() is not necessarily
+           reentrant, but in this case it does not really matter as the code
+           does not care what value is returned. In a more secure application
+           a version of rand() that is known to be reentrant should be used -
+           or calls to rand() should be protected using a critical section. */
+        vTaskDelay( ( rand() % xMaxBlockTimeTicks ) );
     }
 }
 
 void app_main() {
-    //zero-initialize the config structure.
-    gpio_config_t io_conf = {};
-    //disable interrupt
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    //set as input mode
-    io_conf.mode = GPIO_MODE_INPUT;
-    //bit mask of the input pin
-    io_conf.pin_bit_mask = (1ULL << GPIO_NUM_6);
-    //enable pull-up mode
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    //disable pull-down mode
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    //configure GPIO with the given settings
-    gpio_config(&io_conf);
-
-    xIntegerQueue = xQueueCreate(10, sizeof(uint32_t));
-
-    if (xIntegerQueue) {
-
-        xTaskCreate( integerPrinter, "Integer", 2000, NULL, 2, NULL );
-
-        gpio_install_isr_service(ESP_INTR_FLAG_LOWMED);
-
-        gpio_isr_handler_add(GPIO_NUM_6, isrHandler, NULL);
-
-        gpio_set_intr_type(GPIO_NUM_6, GPIO_INTR_LOW_LEVEL);
-        printf("Interrupt enabled\n");
-    } else {
-        printf("Queue failed to create\n");
+    /* Before a semaphore is used it must be explicitly created. In this
+       example a mutex type semaphore is created. */
+    xMutex = xSemaphoreCreateMutex();
+    /* Check the semaphore was created successfully before creating the
+       tasks. */
+    if( xMutex != NULL ) {
+        /* Create two instances of the tasks that write to stdout. The string
+           they write is passed in to the task as the task's parameter. The
+           tasks are created at different priorities so some pre-emption will
+           occur. */
+        xTaskCreate( prvPrintTask, "Print1", 2000,
+                     "Task 1 ***************************************\n",
+                     1, NULL );
+        xTaskCreate( prvPrintTask, "Print2", 2000,
+                     "Task 2 ---------------------------------------\n",
+                     2, NULL );
     }
 }
