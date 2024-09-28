@@ -3,29 +3,26 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/portable.h"
 
-SemaphoreHandle_t  xMutex;
+QueueHandle_t  xPrintQueue;
 
-static void prvNewPrintString( const char *pcString ) {
-    /* The mutex is created before the scheduler is started, so already exists
-       by the time this task executes.
-       Attempt to take the mutex, blocking indefinitely to wait for the mutex
-       if it is not available straight away. The call to xSemaphoreTake() will
-       only return when the mutex has been successfully obtained, so there is
-       no need to check the function return value. If any other delay period
-       was used then the code must check that xSemaphoreTake() returns pdTRUE
-       before accessing the shared resource (which in this case is standard
-       out). As noted earlier in this book, indefinite time outs are not
-       recommended for production code. */
-    xSemaphoreTake( xMutex, portMAX_DELAY );
-    {
-        /* The following line will only execute once the mutex has been
-           successfully obtained. Standard out can be accessed freely now as
-           only one task can have the mutex at any one time. */
-        printf( "%s", pcString );
+static void prvStdioGatekeeperTask( void *pvParameters ) {
+    char *pcMessageToPrint;
+    /* This is the only task that is allowed to write to standard out. Any
+       other task wanting to write a string to the output does not access
+       standard out directly, but instead sends the string to this task. As
+       only this task accesses standard out there are no mutual exclusion or
+       serialization issues to consider within the implementation of the task
+       itself. */
+    for( ;; ) {
+        /* Wait for a message to arrive. An indefinite block time is specified
+           so there is no need to check the return value – the function will
+           only return when a message has been successfully received. */
+        xQueueReceive( xPrintQueue, &pcMessageToPrint, portMAX_DELAY );
+        /* Output the received string. */
+        printf( "%s", pcMessageToPrint );
         fflush( stdout );
-        /* The mutex MUST be given back! */
+        /* Loop back to wait for the next message. */
     }
-    xSemaphoreGive( xMutex );
 }
 
 static void prvPrintTask( void *pvParameters ) {
@@ -36,8 +33,13 @@ static void prvPrintTask( void *pvParameters ) {
        cast to the required type. */
     pcStringToPrint = ( char * ) pvParameters;
     while(true) {
-        /* Print out the string using the newly defined function. */
-        prvNewPrintString( pcStringToPrint );
+        /* Print out the string, not directly, but instead by passing a pointer
+           to the string to the gatekeeper task via a queue. The queue is
+           created before the scheduler is started so will already exist by the
+           time this task executes for the first time. A block time is not
+           specified because there should always be space in the queue. */
+        xQueueSendToBack( xPrintQueue, &pcStringToPrint, 0 );
+
         /* Wait a pseudo random time. Note that rand() is not necessarily
            reentrant, but in this case it does not really matter as the code
            does not care what value is returned. In a more secure application
@@ -47,22 +49,44 @@ static void prvPrintTask( void *pvParameters ) {
     }
 }
 
+void vApplicationTickHook( void ) {
+    char *stringToPrint = "Message printed from the tick hook interrupt ##############\n";
+    static int iCount = 0;
+    /* Print out a message every 200 ticks. The message is not written out
+       directly, but sent to the gatekeeper task. */
+    iCount++;
+    if( iCount >= 200 ) {
+        /* As xQueueSendToFrontFromISR() is being called from the tick hook, it
+           is not necessary to use the xHigherPriorityTaskWoken parameter (the
+           third parameter), and the parameter is set to NULL. */
+        xQueueSendToFrontFromISR( xPrintQueue,
+                                  &stringToPrint,
+                                  NULL );
+        /* Reset the count ready to print out the string again in 200 ticks
+           time. */
+        iCount = 0;
+    }
+}
+
 void app_main() {
-    /* Before a semaphore is used it must be explicitly created. In this
-       example a mutex type semaphore is created. */
-    xMutex = xSemaphoreCreateMutex();
-    /* Check the semaphore was created successfully before creating the
-       tasks. */
-    if( xMutex != NULL ) {
-        /* Create two instances of the tasks that write to stdout. The string
-           they write is passed in to the task as the task's parameter. The
-           tasks are created at different priorities so some pre-emption will
-           occur. */
-        xTaskCreate( prvPrintTask, "Print1", 2000,
-                     "Task 1 ***************************************\n",
-                     1, NULL );
-        xTaskCreate( prvPrintTask, "Print2", 2000,
-                     "Task 2 ---------------------------------------\n",
-                     2, NULL );
+    /* Before a queue is used it must be explicitly created. The queue is
+       created to hold a maximum of 5 character pointers. */
+    xPrintQueue = xQueueCreate( 5, sizeof( char * ) );
+
+    /* Check the queue was created successfully. */
+    if( xPrintQueue != NULL ) {
+        /* Create two instances of the tasks that send messages to the
+           gatekeeper. The index to the string the task uses is passed to the
+           task via the task parameter (the 4th parameter to xTaskCreate()).
+           The tasks are created at different priorities so the higher priority
+           task will occasionally preempt the lower priority task. */
+        xTaskCreate( prvPrintTask, "Print1", 1000, "Task 1 ***************************************\n", 1, NULL );
+        xTaskCreate( prvPrintTask, "Print2", 1000, "Task 2 ---------------------------------------\n", 2, NULL );
+        /* Create the gatekeeper task. This is the only task that is permitted
+           to directly access standard out. */
+        xTaskCreate( prvStdioGatekeeperTask, "Gatekeeper", 2000, NULL, 0, NULL );
+        printf("Created tasks\n");
+    } else {
+        printf("Failed to create queue\n");
     }
 }
