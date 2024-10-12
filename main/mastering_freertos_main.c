@@ -1,92 +1,105 @@
+#include <sys/dirent.h>
+#include <sys/cdefs.h>
 #include <stdio.h>
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portable.h"
 
-QueueHandle_t  xPrintQueue;
+/* Definitions for the event bits in the event group. */
+#define mainFIRST_TASK_BIT ( 1UL << 0UL )   /* Event bit 0, set by a task */
+#define mainSECOND_TASK_BIT ( 1UL << 1UL )  /* Event bit 1, set by a task */
+#define mainISR_BIT ( 1UL << 2UL )          /* Event bit 2, set by an ISR */
 
-static void prvStdioGatekeeperTask( void *pvParameters ) {
-    char *pcMessageToPrint;
-    /* This is the only task that is allowed to write to standard out. Any
-       other task wanting to write a string to the output does not access
-       standard out directly, but instead sends the string to this task. As
-       only this task accesses standard out there are no mutual exclusion or
-       serialization issues to consider within the implementation of the task
-       itself. */
-    for( ;; ) {
-        /* Wait for a message to arrive. An indefinite block time is specified
-           so there is no need to check the return value – the function will
-           only return when a message has been successfully received. */
-        xQueueReceive( xPrintQueue, &pcMessageToPrint, portMAX_DELAY );
-        /* Output the received string. */
-        printf( "%s", pcMessageToPrint );
-        fflush( stdout );
-        /* Loop back to wait for the next message. */
+EventGroupHandle_t  xEventGroup;
+
+_Noreturn static void vEventBitSettingTask( void *pvParameters ) {
+    const TickType_t xDelay200ms = pdMS_TO_TICKS( 200UL );
+    while(true) {
+        /* Delay for a short while before starting the next loop. */
+        vTaskDelay( xDelay200ms );
+        /* Print out a message to say event bit 0 is about to be set by the
+           task, then set event bit 0. */
+        printf( "Bit setting task -\t about to set bit 0.\n" );
+        xEventGroupSetBits( xEventGroup, mainFIRST_TASK_BIT );
+        /* Delay for a short while before setting the other bit. */
+        vTaskDelay( xDelay200ms );
+        /* Print out a message to say event bit 1 is about to be set by the
+           task, then set event bit 1. */
+        printf( "Bit setting task -\t about to set bit 1.\n" );
+        xEventGroupSetBits( xEventGroup, mainSECOND_TASK_BIT );
     }
 }
 
-static void prvPrintTask( void *pvParameters ) {
-    char *pcStringToPrint;
-    const TickType_t xMaxBlockTimeTicks = 0x20;
-    /* Two instances of this task are created. The string printed by the task
-       is passed into the task using the task's parameter. The parameter is
-       cast to the required type. */
-    pcStringToPrint = ( char * ) pvParameters;
-    while(true) {
-        /* Print out the string, not directly, but instead by passing a pointer
-           to the string to the gatekeeper task via a queue. The queue is
-           created before the scheduler is started so will already exist by the
-           time this task executes for the first time. A block time is not
-           specified because there should always be space in the queue. */
-        xQueueSendToBack( xPrintQueue, &pcStringToPrint, 0 );
-
-        /* Wait a pseudo random time. Note that rand() is not necessarily
-           reentrant, but in this case it does not really matter as the code
-           does not care what value is returned. In a more secure application
-           a version of rand() that is known to be reentrant should be used -
-           or calls to rand() should be protected using a critical section. */
-        vTaskDelay( ( rand() % xMaxBlockTimeTicks ) );
-    }
+void vPrintStringFromDaemonTask(void * stringToPrint, uint32_t numParam) {
+    printf("%s", (char *)stringToPrint);
 }
 
 void vApplicationTickHook( void ) {
-    char *stringToPrint = "Message printed from the tick hook interrupt ##############\n";
+    static const char *pcString = "Bit setting ISR -\t about to set bit 2.\n";
     static int iCount = 0;
-    /* Print out a message every 200 ticks. The message is not written out
+    /* Print out a message every 500 ms. The message is not written out
        directly, but sent to the gatekeeper task. */
     iCount++;
-    if( iCount >= 200 ) {
-        /* As xQueueSendToFrontFromISR() is being called from the tick hook, it
-           is not necessary to use the xHigherPriorityTaskWoken parameter (the
-           third parameter), and the parameter is set to NULL. */
-        xQueueSendToFrontFromISR( xPrintQueue,
-                                  &stringToPrint,
-                                  NULL );
-        /* Reset the count ready to print out the string again in 200 ticks
-           time. */
+    if( iCount >= pdMS_TO_TICKS(500) ) {
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        /* Print out a message to say bit 2 is about to be set. Messages cannot
+            be printed from an ISR, so defer the actual output to the RTOS daemon
+            task by pending a function call to run in the context of the RTOS
+            daemon task. */
+        xTimerPendFunctionCallFromISR( vPrintStringFromDaemonTask, ( void * ) pcString,
+                                       0,
+                                       &xHigherPriorityTaskWoken );
+
+        /* Set bit 2 in the event group. */
+        xEventGroupSetBitsFromISR( xEventGroup,
+                                   mainISR_BIT,
+                                   &xHigherPriorityTaskWoken );
+        /* Reset the count */
         iCount = 0;
     }
 }
 
-void app_main() {
-    /* Before a queue is used it must be explicitly created. The queue is
-       created to hold a maximum of 5 character pointers. */
-    xPrintQueue = xQueueCreate( 5, sizeof( char * ) );
-
-    /* Check the queue was created successfully. */
-    if( xPrintQueue != NULL ) {
-        /* Create two instances of the tasks that send messages to the
-           gatekeeper. The index to the string the task uses is passed to the
-           task via the task parameter (the 4th parameter to xTaskCreate()).
-           The tasks are created at different priorities so the higher priority
-           task will occasionally preempt the lower priority task. */
-        xTaskCreate( prvPrintTask, "Print1", 1000, "Task 1 ***************************************\n", 1, NULL );
-        xTaskCreate( prvPrintTask, "Print2", 1000, "Task 2 ---------------------------------------\n", 2, NULL );
-        /* Create the gatekeeper task. This is the only task that is permitted
-           to directly access standard out. */
-        xTaskCreate( prvStdioGatekeeperTask, "Gatekeeper", 2000, NULL, 0, NULL );
-        printf("Created tasks\n");
-    } else {
-        printf("Failed to create queue\n");
+_Noreturn static void vEventBitReadingTask( void *pvParameters ) {
+    EventBits_t xEventGroupValue;
+    const EventBits_t xBitsToWaitFor = (mainFIRST_TASK_BIT |
+                                        mainSECOND_TASK_BIT |
+                                        mainISR_BIT);
+    while (true) {
+/* Block to wait for event bits to become set within the event
+   group. */
+        xEventGroupValue = xEventGroupWaitBits(
+                /* The event group to read */
+                xEventGroup,
+                /* Bits to test */
+                xBitsToWaitFor,
+                /* Clear bits on exit if the
+                   unblock condition is met */
+                pdTRUE,
+                /* Don't wait for all bits. This
+                   parameter is set to pdTRUE for
+                   second execution. */
+                pdFALSE,
+                /* Don't time out. */
+                portMAX_DELAY);
+/* Print a message for each bit that was set. */
+        if ((xEventGroupValue & mainFIRST_TASK_BIT) != 0) {
+            printf("Bit reading task -\t Event bit 0 was set\n");
+        }
+        if ((xEventGroupValue & mainSECOND_TASK_BIT) != 0) {
+            printf("Bit reading task -\t Event bit 1 was set\n");
+        }
+        if ((xEventGroupValue & mainISR_BIT) != 0) {
+            printf("Bit reading task -\t Event bit 2 was set\n");
+        }
     }
+}
+
+void app_main() {
+    /* Before an event group can be used it must first be created. */
+    xEventGroup = xEventGroupCreate();
+    /* Create the task that sets event bits in the event group. */
+    xTaskCreate( vEventBitSettingTask, "Bit Setter", 1000, NULL, 1, NULL );
+    /* Create the task that waits for event bits to get set in the event
+       group. */
+    xTaskCreate( vEventBitReadingTask, "Bit Reader", 1000, NULL, 2, NULL );
 }
