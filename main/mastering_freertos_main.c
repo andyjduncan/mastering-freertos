@@ -33,19 +33,12 @@ _Noreturn static void vHandlerTask( void *pvParameters ) {
        interrupts. */
     const TickType_t xMaxExpectedBlockTime = pdMS_TO_TICKS(2000);
 
-    uint32_t eventsToProcess;
-
     /* As per most tasks, this task is implemented within an infinite loop. */
     while(true) {
         printf("Waiting for events...\n");
 
-        eventsToProcess = ulTaskNotifyTake(pdTRUE, xMaxExpectedBlockTime);
-
-        if (eventsToProcess != 0) {
-            while (eventsToProcess > 0) {
-                printf("Processing event...\n");
-                eventsToProcess--;
-            }
+        if (ulTaskNotifyTake(pdFALSE, xMaxExpectedBlockTime) != 0) {
+            printf("Processing event...\n");
         } else {
             printf("Handler task - Timeout waiting for event.\n");
         }
