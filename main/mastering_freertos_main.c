@@ -4,64 +4,76 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/portable.h"
 
-/* Definitions for the event bits in the event group. */
-#define mainFIRST_TASK_BIT ( 1UL << 0UL ) /* Event bit 0, set by the 1st task */
-#define mainSECOND_TASK_BIT ( 1UL << 1UL ) /* Event bit 1, set by the 2nd task */
-#define mainTHIRD_TASK_BIT ( 1UL << 2UL ) /* Event bit 2, set by the 3rd task */
+TaskHandle_t handlerTask;
 
-EventGroupHandle_t  xEventGroup;
+static void isrHandler() {
+    BaseType_t xHigherPriorityTaskWoken;
 
-_Noreturn static void vSyncingTask( void *pvParameters ) {
-    const TickType_t xMaxDelay = pdMS_TO_TICKS( 4000UL );
-    const TickType_t xMinDelay = pdMS_TO_TICKS( 200UL );
-    TickType_t xDelayTime;
-    EventBits_t uxThisTasksSyncBit;
-    const EventBits_t uxAllSyncBits = ( mainFIRST_TASK_BIT | mainSECOND_TASK_BIT | mainTHIRD_TASK_BIT );
-    /* Three instances of this task are created - each task uses a different
-       event bit in the synchronization. The event bit to use is passed into
-       each task instance using the task parameter. Store it in the
-       uxThisTasksSyncBit variable. */
-    uxThisTasksSyncBit = ( EventBits_t ) pvParameters;
+    /* The xHigherPriorityTaskWoken parameter must be initialized to
+       pdFALSE as it will get set to pdTRUE inside the interrupt safe
+       API function if a context switch is required. */
+    xHigherPriorityTaskWoken = pdFALSE;
+
+    vTaskNotifyGiveFromISR(handlerTask, &xHigherPriorityTaskWoken);
+
+    /* Pass the xHigherPriorityTaskWoken value into portYIELD_FROM_ISR().
+      If xHigherPriorityTaskWoken was set to pdTRUE inside
+      xSemaphoreGiveFromISR() then calling portYIELD_FROM_ISR() will request
+      a context switch. If xHigherPriorityTaskWoken is still pdFALSE then
+      calling portYIELD_FROM_ISR() will have no effect. Unlike most FreeRTOS
+      ports, the Windows port requires the ISR to return a value - the return
+      statement is inside the Windows version of portYIELD_FROM_ISR(). */
+    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+}
+
+_Noreturn static void vHandlerTask( void *pvParameters ) {
+    /* xMaxExpectedBlockTime holds the maximum time expected between two
+       interrupts. */
+    const TickType_t xMaxExpectedBlockTime = pdMS_TO_TICKS(2000);
+
+    uint32_t eventsToProcess;
+
+    /* As per most tasks, this task is implemented within an infinite loop. */
     while(true) {
-        /* Simulate this task taking some time to perform an action by delaying
-           for a pseudo random time. This prevents all three instances of this
-           task reaching the synchronization point at the same time, and so
-           allows the example's behavior to be observed more easily. */
-        xDelayTime = ( rand() % xMaxDelay ) + xMinDelay;
-        vTaskDelay( xDelayTime );
-        /* Print out a message to show this task has reached its synchronization
-           point. pcTaskGetTaskName() is an API function that returns the name
-           assigned to the task when the task was created. */
-        printf("%lu: %s reached sync point\n", xTaskGetTickCount(), pcTaskGetName(NULL));
-        /* Wait for all the tasks to have reached their respective
-           synchronization points. */
-        xEventGroupSync( /* The event group used to synchronize. */
-                xEventGroup,
-                /* The bit set by this task to indicate it has reached
-                   the synchronization point. */
-                uxThisTasksSyncBit,
-                /* The bits to wait for, one bit for each task taking
-                   part in the synchronization. */
-                uxAllSyncBits,
-                /* Wait indefinitely for all three tasks to reach the
-                   synchronization point. */
-                portMAX_DELAY );
-        /* Print out a message to show this task has passed its synchronization
-           point. As an indefinite delay was used the following line will only
-           be executed after all the tasks reached their respective
-           synchronization points. */
-        printf("%lu: %s exited sync point\n", xTaskGetTickCount(), pcTaskGetName(NULL));
+        printf("Waiting for events...\n");
+
+        eventsToProcess = ulTaskNotifyTake(pdTRUE, xMaxExpectedBlockTime);
+
+        if (eventsToProcess != 0) {
+            while (eventsToProcess > 0) {
+                printf("Processing event...\n");
+                eventsToProcess--;
+            }
+        } else {
+            printf("Handler task - Timeout waiting for event.\n");
+        }
     }
 }
 
 void app_main() {
-/* Before an event group can be used it must first be created. */
-    xEventGroup = xEventGroupCreate();
-    /* Create three instances of the task. Each task is given a different
-       name, which is later printed out to give a visual indication of which
-       task is executing. The event bit to use when the task reaches its
-       synchronization point is passed into the task using the task parameter. */
-    xTaskCreate(vSyncingTask, "Task 1", 2000, (void *) mainFIRST_TASK_BIT, 1, NULL );
-    xTaskCreate(vSyncingTask, "Task 2", 2000, (void *) mainSECOND_TASK_BIT, 1, NULL );
-    xTaskCreate(vSyncingTask, "Task 3", 2000, (void *) mainTHIRD_TASK_BIT, 1, NULL );
+    //zero-initialize the config structure.
+    gpio_config_t io_conf = {};
+    //disable interrupt
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    //set as input mode
+    io_conf.mode = GPIO_MODE_INPUT;
+    //bit mask of the input pin
+    io_conf.pin_bit_mask = (1ULL << GPIO_NUM_6);
+    //enable pull-up mode
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    //disable pull-down mode
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    //configure GPIO with the given settings
+    gpio_config(&io_conf);
+
+    gpio_install_isr_service(ESP_INTR_FLAG_LOWMED);
+
+    gpio_isr_handler_add(GPIO_NUM_6, isrHandler, NULL);
+
+    xTaskCreate(vHandlerTask, "Handler", 4000, NULL, 3, &handlerTask);
+
+    if (handlerTask != NULL) {
+        gpio_set_intr_type(GPIO_NUM_6, GPIO_INTR_LOW_LEVEL);
+        printf("Interrupt enabled\n");
+    }
 }
