@@ -15,6 +15,8 @@ static void isrHandler() {
     xHigherPriorityTaskWoken = pdFALSE;
 
     vTaskNotifyGiveFromISR(handlerTask, &xHigherPriorityTaskWoken);
+    vTaskNotifyGiveFromISR(handlerTask, &xHigherPriorityTaskWoken);
+    vTaskNotifyGiveFromISR(handlerTask, &xHigherPriorityTaskWoken);
 
     /* Pass the xHigherPriorityTaskWoken value into portYIELD_FROM_ISR().
       If xHigherPriorityTaskWoken was set to pdTRUE inside
